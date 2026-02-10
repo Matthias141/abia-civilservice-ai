@@ -12,7 +12,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 import anthropic
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -26,6 +26,7 @@ from config import (
     ANTHROPIC_API_KEY,
     CHROMA_DIR,
     CLAUDE_MODEL,
+    DOCUMENTS_DIR,
     EMBEDDING_MODEL,
     FRONTEND_URL,
     MAX_TOKENS,
@@ -209,6 +210,50 @@ async def trigger_ingest(request: Request):
             status_code=500,
             content={"error": f"Ingestion failed: {str(e)}"},
         )
+
+
+@app.post("/api/upload")
+@limiter.limit("5/minute")
+async def upload_document(request: Request, file: UploadFile = File(...)):
+    """Upload a PDF document and trigger re-ingestion."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Only PDF files are accepted."},
+        )
+
+    os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+    file_path = os.path.join(DOCUMENTS_DIR, file.filename)
+
+    contents = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(contents)
+
+    # Re-ingest all documents
+    try:
+        from ingest import ingest
+        ingest()
+        load_vector_store()
+        count = vector_store._collection.count() if vector_store else 0
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "chunks_loaded": count,
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Upload succeeded but ingestion failed: {str(e)}"},
+        )
+
+
+@app.get("/api/documents")
+async def list_documents():
+    """List all PDF documents in the knowledge base."""
+    if not os.path.exists(DOCUMENTS_DIR):
+        return {"documents": []}
+    pdfs = [f for f in os.listdir(DOCUMENTS_DIR) if f.lower().endswith(".pdf")]
+    return {"documents": sorted(pdfs)}
 
 
 @app.get("/api/suggested-questions")

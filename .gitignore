@@ -12,8 +12,9 @@ venv/
 dist/
 build/
 
-# Vector database
-backend/chroma_db/
+# Vector database — tracked so it deploys to Railway
+# Uncomment below to exclude from git:
+# backend/chroma_db/
 
 # Node.js
 node_modules/
@@ -30,5 +31,6 @@ out/
 .DS_Store
 Thumbs.db
 
-# Documents (large files)
-backend/documents/*.pdf
+# Documents — tracked so Railway can serve them
+# Uncomment below to exclude large PDFs from git:
+# backend/documents/*.pdf
