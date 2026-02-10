@@ -1,0 +1,36 @@
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+*.egg-info/
+dist/
+build/
+
+# Vector database — tracked so it deploys to Railway
+# Uncomment below to exclude from git:
+# backend/chroma_db/
+
+# Node.js
+node_modules/
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documents — tracked so Railway can serve them
+# Uncomment below to exclude large PDFs from git:
+# backend/documents/*.pdf
