@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: process.env.DOCKER_BUILD === "true" ? "standalone" : "export",
+  ...(process.env.DOCKER_BUILD === "true" ? { output: "standalone" } : {}),
 };
 
 module.exports = nextConfig;
