@@ -72,8 +72,27 @@ docker-compose up --build
 |--------|----------|-------------|
 | POST | `/api/chat` | Send a message and receive an AI response |
 | GET | `/health` | Health check |
-| POST | `/api/ingest` | Trigger document re-ingestion |
+| POST | `/api/upload` | Admin only: upload one PDF (up to 10 MiB) and re-index |
+| POST | `/api/ingest` | Admin only: trigger document re-ingestion |
 | GET | `/api/suggested-questions` | Get suggested questions for the UI |
+
+Set a strong, random `ADMIN_TOKEN` in the backend environment to enable
+the admin endpoints. Call them with `Authorization: Bearer <token>` over HTTPS.
+If the token is unset, both endpoints are disabled. Do not expose it in frontend
+configuration.
+
+Send uploads as `multipart/form-data` with one `file` field. Use a plain PDF filename
+with no path components; the extension is saved as lowercase `.pdf`. Existing
+documents are not overwritten.
+
+### Backend tests
+
+From `backend/` in the active virtual environment:
+
+```bash
+pip install -r requirements.txt pytest
+python -m pytest -q
+```
 
 ## Project Structure
 

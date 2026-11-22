@@ -24,6 +24,9 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 # Rate limiting
 RATE_LIMIT = os.getenv("RATE_LIMIT", "20/minute")
 
+# Document administration
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
 # Paths
 DOCUMENTS_DIR = os.getenv("DOCUMENTS_DIR", "./documents")
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")

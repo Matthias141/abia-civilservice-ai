@@ -8,21 +8,33 @@ Usage: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 import os
 import re
+import secrets
+import shutil
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path, PureWindowsPath
+from tempfile import TemporaryDirectory
+from typing import BinaryIO
 
 import anthropic
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
+from multipart.exceptions import MultipartParseError
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.datastructures import UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
 
 from config import (
+    ADMIN_TOKEN,
     ANTHROPIC_API_KEY,
     CHROMA_DIR,
     CLAUDE_MODEL,
@@ -38,6 +50,9 @@ from config import (
 # --- Globals ---
 vector_store = None
 client = None
+admin_bearer = HTTPBearer(auto_error=False)
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
 def load_vector_store():
@@ -110,6 +125,54 @@ class ChatResponse(BaseModel):
 
 
 # --- Helper functions ---
+async def require_admin(
+    credentials: HTTPAuthorizationCredentials | None = Depends(admin_bearer),
+):
+    if not ADMIN_TOKEN.strip():
+        raise HTTPException(503, "Document administration is disabled.")
+    if credentials is None or not secrets.compare_digest(
+        credentials.credentials.encode(), ADMIN_TOKEN.encode()
+    ):
+        raise HTTPException(401, "Admin token required.", headers={"WWW-Authenticate": "Bearer"})
+
+
+class UploadTooLarge(MultiPartException):
+    pass
+
+
+async def bounded_upload_stream(request: Request) -> AsyncGenerator[bytes, None]:
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES:
+            raise UploadTooLarge("Multipart upload exceeds the size limit.")
+        yield chunk
+
+
+def safe_pdf_filename(filename: str | None) -> str:
+    if not filename or not filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are accepted.")
+    stem = filename[:-4]
+    if (
+        len(filename.encode()) > 240
+        or not re.fullmatch(r"[\w-][\w. ()-]*", stem)
+        or PureWindowsPath(filename).is_reserved()
+    ):
+        raise HTTPException(400, "Invalid PDF filename.")
+    return f"{stem}.pdf"
+
+
+def save_pdf(filename: str, source: BinaryIO):
+    documents_dir = Path(DOCUMENTS_DIR)
+    documents_dir.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=documents_dir, prefix=".upload-") as staging_dir:
+        staged = Path(staging_dir) / "document"
+        with staged.open("wb") as target:
+            shutil.copyfileobj(source, target)
+        # Publish only the complete file, without following or replacing an existing entry.
+        os.link(staged, documents_dir / filename)
+
+
 def sanitize_input(text: str) -> str:
     """Basic input sanitization."""
     text = text.strip()
@@ -195,7 +258,7 @@ async def chat(request: Request, chat_request: ChatRequest):
     )
 
 
-@app.post("/api/ingest")
+@app.post("/api/ingest", dependencies=[Depends(require_admin)])
 @limiter.limit("2/minute")
 async def trigger_ingest(request: Request):
     """Trigger document re-ingestion without restarting the server."""
@@ -212,22 +275,52 @@ async def trigger_ingest(request: Request):
         )
 
 
-@app.post("/api/upload")
+@app.post(
+    "/api/upload",
+    dependencies=[Depends(require_admin)],
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["file"],
+                        "properties": {"file": {"type": "string", "format": "binary"}},
+                    },
+                },
+            },
+        },
+    },
+)
 @limiter.limit("5/minute")
-async def upload_document(request: Request, file: UploadFile = File(...)):
+async def upload_document(request: Request):
     """Upload a PDF document and trigger re-ingestion."""
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Only PDF files are accepted."},
-        )
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "multipart/form-data":
+        raise HTTPException(400, "Expected a multipart PDF upload.")
+    try:
+        form = await MultiPartParser(
+            request.headers, bounded_upload_stream(request), max_files=1, max_fields=0
+        ).parse()
+    except UploadTooLarge as exc:
+        raise HTTPException(413, "PDF upload exceeds the size limit.") from exc
+    except (MultiPartException, MultipartParseError) as exc:
+        raise HTTPException(400, "Invalid multipart upload.") from exc
 
-    os.makedirs(DOCUMENTS_DIR, exist_ok=True)
-    file_path = os.path.join(DOCUMENTS_DIR, file.filename)
-
-    contents = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    try:
+        file = form.get("file")
+        if not isinstance(file, UploadFile):
+            raise HTTPException(400, "A PDF file is required.")
+        filename = safe_pdf_filename(file.filename)
+        if file.size is None or file.size > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "PDF upload exceeds the size limit.")
+        try:
+            await run_in_threadpool(save_pdf, filename, file.file)
+        except FileExistsError as exc:
+            raise HTTPException(409, "A document with this filename already exists.") from exc
+    finally:
+        await form.close()
 
     # Re-ingest all documents
     try:
@@ -237,7 +330,7 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         count = vector_store._collection.count() if vector_store else 0
         return {
             "status": "success",
-            "filename": file.filename,
+            "filename": filename,
             "chunks_loaded": count,
         }
     except Exception as e:
