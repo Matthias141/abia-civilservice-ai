@@ -323,9 +323,11 @@ async def upload_document(request: Request):
         await form.close()
 
     # Re-ingest all documents
+    indexed = False
     try:
         from ingest import ingest
         ingest()
+        indexed = True
         load_vector_store()
         count = vector_store._collection.count() if vector_store else 0
         return {
@@ -334,9 +336,11 @@ async def upload_document(request: Request):
             "chunks_loaded": count,
         }
     except Exception as e:
+        if not indexed:
+            (Path(DOCUMENTS_DIR) / filename).unlink(missing_ok=True)
         return JSONResponse(
             status_code=500,
-            content={"error": f"Upload succeeded but ingestion failed: {str(e)}"},
+            content={"error": f"Could not complete upload and indexing: {str(e)}"},
         )
 
 

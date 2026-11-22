@@ -194,3 +194,25 @@ def test_admin_can_upload_pdf_at_limit(admin_routes, monkeypatch):
     assert list(documents.iterdir()) == [saved]
     ingest.assert_called_once_with()
     main.load_vector_store.assert_called_once_with()
+
+
+def test_upload_can_be_retried_after_ingestion_fails(admin_routes):
+    documents, ingest = admin_routes
+    ingest.side_effect = [ValueError("Unreadable PDF"), None]
+    documents.mkdir()
+    existing = documents / "existing.pdf"
+    existing.write_bytes(PDF_BYTES)
+
+    assert upload_pdf("notes.pdf").status_code == 500
+    assert list(documents.iterdir()) == [existing]
+    main.load_vector_store.assert_not_called()
+
+    assert upload_pdf("notes.pdf").status_code == 200
+    assert (documents / "notes.pdf").read_bytes() == PDF_BYTES
+
+
+def test_upload_keeps_indexed_pdf_if_index_reload_fails(admin_routes):
+    documents, _ = admin_routes
+    main.load_vector_store.side_effect = RuntimeError("Index reload failed")
+    assert upload_pdf("notes.pdf").status_code == 500
+    assert (documents / "notes.pdf").read_bytes() == PDF_BYTES
