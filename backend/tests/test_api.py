@@ -107,7 +107,16 @@ def upload_pdf(filename, content=PDF_BYTES):
 
 @pytest.mark.parametrize(
     "filename",
-    ["notes.txt", ".pdf", "folder/notes.pdf", r"folder\notes.pdf", "NUL.pdf", "a" * 240 + ".pdf"],
+    [
+        "notes.txt",
+        ".pdf",
+        "folder/notes.pdf",
+        r"folder\notes.pdf",
+        "notes:2026.pdf",
+        "notes\u202e.pdf",
+        "NUL.pdf",
+        "a" * 240 + ".pdf",
+    ],
 )
 def test_upload_rejects_invalid_pdf_filenames(admin_routes, filename):
     documents, ingest = admin_routes
@@ -183,12 +192,15 @@ def test_upload_does_not_replace_an_existing_entry(admin_routes, symlink):
     ingest.assert_not_called()
 
 
-def test_admin_can_upload_pdf_at_limit(admin_routes, monkeypatch):
+@pytest.mark.parametrize(
+    "filename", ["Civil Service Rules.PDF", "Workers’ Compensation.PDF", "Pay Circular – 2026.PDF"]
+)
+def test_admin_can_upload_pdf_at_limit(admin_routes, monkeypatch, filename):
     documents, ingest = admin_routes
     monkeypatch.setattr(main, "MAX_UPLOAD_BYTES", len(PDF_BYTES))
-    response = upload_pdf("Civil Service Rules.PDF")
+    response = upload_pdf(filename)
     assert response.status_code == 200
-    assert response.json()["filename"] == "Civil Service Rules.pdf"
+    assert response.json()["filename"] == f"{filename[:-4]}.pdf"
     saved = documents / response.json()["filename"]
     assert saved.read_bytes() == PDF_BYTES
     assert list(documents.iterdir()) == [saved]

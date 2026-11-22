@@ -152,14 +152,15 @@ async def bounded_upload_stream(request: Request) -> AsyncGenerator[bytes, None]
 def safe_pdf_filename(filename: str | None) -> str:
     if not filename or not filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted.")
-    stem = filename[:-4]
     if (
         len(filename.encode()) > 240
-        or not re.fullmatch(r"[\w-][\w. ()-]*", stem)
+        or filename[0] in ". "
+        or not filename.isprintable()
+        or any(char in filename for char in '<>:"/\\|?*')
         or PureWindowsPath(filename).is_reserved()
     ):
         raise HTTPException(400, "Invalid PDF filename.")
-    return f"{stem}.pdf"
+    return f"{filename[:-4]}.pdf"
 
 
 def save_pdf(filename: str, source: BinaryIO):
